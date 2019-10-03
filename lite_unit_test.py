@@ -91,13 +91,9 @@ class UnitTest:
                 # Catch all exceptions in theory
                 print("Failed to execute {}({})."\
                        .format(func.__name__,func_arg))
+                exception_str = "Error: {}. {}".format(e.__doc__, e)
                 # Should be better to print in stderr
-                print("Error:")
-                print(e.__doc__)
-                # Sometimes str(e) doesn't have anything.
-                # Just don't print it in that case.
-                if (len(str(e))>1):
-                    print(str(e))
+                print(exception_str)
             finally:
                 # Add a new line to make it easier to 
                 # distinguish between
@@ -111,7 +107,7 @@ class UnitTest:
 # like #pragma once in C++ headers
 UTEST_INSTANCE = UnitTest()
 
-#Example usage
+# Example usage
 if __name__ == "__main__":   
     def test_func(inp):
         if type(inp) is str:
