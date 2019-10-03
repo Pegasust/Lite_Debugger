@@ -2,7 +2,21 @@
     Filename: lite_unit_test.py
     Author: Hung Tran
     Purpose: To ease the unit testing and debugging work.
-    
+    Usage: 
+    <1>: For in-script testing
+        1. Import this module.
+        2. Use UTEST_INSTANCE provided by the module or
+            create a new UnitTest
+        3. Add all tests with UnitTest.add_test()
+        4. After adding all of the test cases, UnitTest.execute()
+    <2>: For writing assignment checker (Advanced):
+        1. Import this module.
+        2. In the checker, use try_import.
+        3. Write test_cases with return value of try_import as the
+            imported module. Example: try_import("merge.py").
+        3. Encapsulate all test cases and execute() of that module in
+            if(try_import is not None)
+
     Potential improvement:
         + Concurrent queue for task scheduling and asynchronous
             unit tests.
@@ -12,6 +26,24 @@
         + Solve lists as f_arg is unhashable.
         + Make exception prints more visible.
 """
+import importlib
+
+def try_import(module_path):
+    """ Try import module_path and return the module. Returns None
+         and prints exception error if import cannot be accomplished.
+         
+        Argument: module_path is string that is absolute or relative
+                        path of the module we want to import
+
+        Returns: module or None
+    """
+    try:
+        return importlib.import_module(module_path)            
+    except Exception as e:
+        exception_str = "Could not import \"{}\". Error: {}; {}"\
+            .format(module_path, e.__doc__, e)
+        print(exception_str)
+        return None
 
 class UnitTest:
     """ A class that helps compare output of a function given an input.
@@ -129,10 +161,8 @@ if __name__ == "__main__":
     UTEST_INSTANCE.add_test(test_func_2_args,(12, 34),\
        test_func_2_args(12,34))  #Correct
     UTEST_INSTANCE.add_test(division, (5,2), "2.5")  #Correct
-    UTEST_INSTANCE.add_test(division, (1, 0), "inf")  #Err
     # Expecting another ZeroDivisionError err msg.
-
+    UTEST_INSTANCE.add_test(division, (1, 0), "inf")  #Err
     # Total should be 3/6
-
     UTEST_INSTANCE.execute()
     
