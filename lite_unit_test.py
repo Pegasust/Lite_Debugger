@@ -1,6 +1,6 @@
 """
     filename: lite_unit_test.py
-    author: hung tran
+    author: Hung Tran
     purpose: to ease the unit testing and debugging work.
 
     =====================================================
@@ -20,7 +20,7 @@
             add_test(self,...)
             add_tests(self,iterable<TestEntry>)
             execute(self)
-            execute_async(self, timeout): HIGHLY DISCOURAGE.
+            execute_async(self, timeout): HIGHLY DISCOURAGED.
     Functions:
         try_import(module_path)
         in_set_wrapper(rhs,lhs)
@@ -62,14 +62,16 @@
 
     potential improvement:
         + Write on stderr upon exceptions
-        + timeout (to come with asynchronous tests)
-        + make Exception prints more visible.
+        + Abort function upon timeout
+        + Make Exception prints more visible.
 """
 import importlib
+import threading
 import multiprocessing
 import traceback
 import os
 import queue
+import time
 from typing import *
 
 def try_import(module_path):
@@ -150,7 +152,7 @@ class TestEntry:
                     for unordered or partial outputs.
                     +str_in_set: same with in_set_wrapper but converts
                     lhs and each element on rhs to string before using "in"
-                -Use TestEntry.multi_init to get sets of UnitTests with the same
+                -Use TestEntry.multi_init to get set of UnitTests with the same
                     func_ptr and equal_ptr and unique test cases.
                 -Use UnitTest.add_test for lazy_init instead. It helps reduce
                 lines of codes.
@@ -171,16 +173,25 @@ class TestEntry:
 
     def __str__(self):
         _ = f'TestEntry: {self.func_name}({self.func_arg})'
-        _ += f'should yield True on {self.equal_func_ptr}({self.equal_func_rhs})'
+        _ += f'should yield True on {self.equal_func_ptr}'
+        _ += f'({self.equal_func_rhs})'
         return _
     # an alternative function to construct a TestEntry
     @classmethod
     def lazy_init(cls,func_ptr,expected_str_out_set,*func_arg):
         """
             cls is the class alias to be passed by @classmethod
+            lazy_init initializes a TestEntry with equal_func 
+            of in_set_wrapper and func_name of func_ptr.__name__
+            Arguments:
+                - func_ptr: pointer to function needs to execute
+                that outputs a certain _output
+                - expected_str_out_set: set of strings such that 
+                the str(_output) would be in expected_str_out_set
+                - *func_arg: positional arguments to func_ptr.
         """
-        return cls(func_ptr,in_set_wrapper,expected_str_out_set,func_ptr.__name__,\
-			*func_arg)
+        return cls(func_ptr,in_set_wrapper,expected_str_out_set,\
+                   func_ptr.__name__, *func_arg)
 
     @classmethod
     def multi_init(cls,func_ptr:Callable[...,Any],\
@@ -189,6 +200,10 @@ class TestEntry:
         ,func_name:str=None,\
         get_each_equal_rhs = False)\
        -> set:
+        """
+            Initialize multiple TestEntry and return a
+            set of TestEntry's.
+        """
 
         if func_name is None:
             func_name = func_ptr.__name__
@@ -199,30 +214,39 @@ class TestEntry:
                 try:
                     i = iter(equal_rhs)
                     for rhs in i:
-                        ret_val.add(cls(func_ptr,equal_func_ptr,rhs,func_name,*func_arg))
+                        ret_val.add(cls(\
+                            func_ptr,equal_func_ptr,rhs,func_name,*func_arg))
                     # ignore anything below
                     continue
                 except TypeError:
                     pass
             # if not get_each_equal_rhs or (is not iterable)
             # add only one test per func_arg tuple
-            ret_val.add(cls(func_ptr,equal_func_ptr,equal_rhs,func_name,*func_arg))
+            ret_val.add(cls(func_ptr,\
+                            equal_func_ptr,equal_rhs,func_name,*func_arg))
         return ret_val
-            
-
-    def execute(self, utest):
+    def execute(self, utest, timedout = None):
         try:
+            # Create a string expression of the function: func(*func_arg)
             func_str = "{}({})".format(self.func_name,\
                ", ".join(map(str,self.func_arg)))
-            # utest.print_queue.put("Evaluating {}".format(func_str))
+            # Get output from executing the function
             output = self.func_ptr(*self.func_arg)
-            output_is_expected = self.equal_func_ptr(output,self.equal_func_rhs)
+            # check if timed out
+            if timedout is not None and timedout[0]:
+                utest.print_queue.put("Failed: ({}) timed out.".
+                                      format(func_str))
+                return None
+            # Evaluate whether output is expected
+            output_is_expected = self.equal_func_ptr(\
+                output,self.equal_func_rhs)
+            # Add the output to the function string
             func_str += "->{}".format(output)
             if output_is_expected:
-                utest.passed.put("Passed: {}\n".format(func_str))
+                utest.passed.put("Passed: {}".format(func_str))
             else:
-                utest.print_queue.put("Failed: {} is not evaluated from {}\n".format\
-                                      (func_str,self.equal_func_rhs))
+                utest.print_queue.put("Failed: {} is not evaluated from {}\n".\
+                                      format(func_str,self.equal_func_rhs))
         except Exception as e:
                 # catch all Exceptions in theory
                 msg = ("Failed: {}".format(str(self)))
@@ -233,35 +257,32 @@ class TestEntry:
                 utest.print_queue.put(msg)
         finally:
             pass
-
-def _execute_synchronously(test_q,utest):
+def _execute_synchronously(test_q,utest, timeout = None):
     utest.print_queue.put("PID #{} should be started.".format(os.getpid()))
+    logger = multiprocessing.get_logger()
     while not test_q.empty():
-        test = test_q.get()
-        test.execute(utest)
+        try:
+            test = test_q.get()
+            timedout = [False]
+            execute_thread = threading.Thread(target = test.execute,
+                                             args = (utest,timedout))
+            execute_thread.start()
+            execute_thread.join(timeout)
+            # if test.execute is not done after timeout
+            if execute_thread.is_alive():
+                # Abort the thread
+                timedout[0] = True
+        except Exception as e:
+            logger.error(e)
+    # test_q is now empty.
     utest.print_queue.put("PID #{} should be joined.".format(os.getpid()))
     return True
-def _execute_print_queue(proceses_joined, print_q, passed_q, count_container\
-    , time_out_sec = 30, counts_per_update = 200):
-    passed_str = "\n"
-    while not proceses_joined[0]:
-        # print("__")
-        try:
-            txt = print_q.get(True, time_out_sec)
-            passed = passed_q.get(True, time_out_sec)
-            if txt is not None and txt is not "":
-                print(txt)
-            if passed is not None and passed is not "":
-                passed_str+=passed
-                i = count_container.get()
-                if (i % counts_per_update)==0:
-                    print("Current count: {}".format(i))
-                count_container.put(i + 1)
-        except queue.Empty:
-            print(passed_str)
-            return True
-    return True
 
+def _all_processes_are_dead(processes:multiprocessing.Process)-> bool:
+    for p in processes:
+        if p.is_alive():
+            return False
+    return True
 
 class UnitTest:
     """
@@ -285,15 +306,14 @@ class UnitTest:
             -count is the number of passed test wrapped by a collection
                 to be passed by reference.
     """
-    PROCESSES = multiprocessing.cpu_count()-2
+    PROCESSES = multiprocessing.cpu_count()-1
 
     def __init__(self):
         self.test_queue = multiprocessing.Queue()
         self.print_queue = multiprocessing.Queue()
         self.total = 0
         self.passed = multiprocessing.Queue()
-        self.count = multiprocessing.Queue()
-        self.count.put(0)
+        self.count = 0
 
     def add_test(self, func, expected_str_out_set, *f_arg):
         """
@@ -334,6 +354,11 @@ class UnitTest:
         self.total += 1
 
     def add_tests(self, *entries):
+        """
+            Note: pass in utest_instance.add_tests(*TestEntry.multi_init())
+            to correctly add tests generated by multi_init(), because
+            add_tests takes positional arguments of entries.
+        """
         for entry in entries:
             self.test_queue.put(entry)
             self.total+=1
@@ -353,44 +378,38 @@ class UnitTest:
             print(self.print_queue.get())
         while not self.passed.empty():
             print(self.passed.get())
-            # increment the thread-safe counter queue
-            self.count.put(self.count.get()+1)
-        print("passed {}/{}".format(self.count.get(), self.total))
+            self.count += 1
+        print("passed {}/{}".format(self.count, self.total))
         return None
 
-    def execute_async(self, timeout_per_test_sec = 30, tests_per_print = 200):
+    def execute_async(self, timeout_per_test_sec:float = 10):
         """
             Executes all TestEntries asynchronously (inaccurate & unsafe)
 
         """
         processes = []
-        print("Executing with {} procssors.".format(self.PROCESSES))
+        print("Executing with {} processors.".format(self.PROCESSES))
         # Assign task to threads
         for n in range(max(self.PROCESSES,1)):
             p = multiprocessing.Process(\
-                target=_execute_synchronously,args=(self.test_queue,self))
+                target=_execute_synchronously,args=[self.test_queue,self,
+                                                    timeout_per_test_sec])
             processes.append(p)
             p.start()
-        # Wrap a bool with collection to pass by ref
-        all_joined = [False]
-        # Initialize the print thread
-        x = (multiprocessing.Process(target=_execute_print_queue,\
-            args=(all_joined,self.print_queue,\
-            self.passed, self.count, timeout_per_test_sec,tests_per_print)))
-        x.start()
+        while not _all_processes_are_dead(processes):
+            if not self.print_queue.empty():
+                print(self.print_queue.get())
+            if not self.passed.empty():
+                print(self.passed.get())
+                self.count+=1
         for p in processes:
             p.join()
-        all_joined[0] = True
-        print("all_joined is true")
-        x.join()
-        print("x is joined")
         while not self.print_queue.empty():
             print(self.print_queue.get())
         while not self.passed.empty():
             print(self.passed.get())
-            self.count.put(self.count.get() + 1)
-        
-        print("passed {}/{}".format(self.count.get(), self.total))
+            self.count += 1
+        print("passed {}/{}".format(self.count, self.total))
         return None
         
 
@@ -399,29 +418,51 @@ class UnitTest:
 # like #pragma once in c++ headers
 UTEST_INSTANCE = UnitTest()
 
+def is_debug():
+    """
+        Safely encapsulates debug-only region.
+        This further evaluates if __name__ is __mp_main__
+        or __main_mp__ because multiprocessing
+        requires some functions to appear
+        when __name__ == __mp_main__ or __main_mp__
+    """
+    DEBUG_SYMBOLS = {"__main__","__mp_main__","__main_mp__"}
+    is_de = __name__ in DEBUG_SYMBOLS
+    return is_de
 
-# multiprocessing requires funcs to be out of __main__ declaration.
-def test_func(inp):
-    if type(inp) is str:
-        raise ZeroDivisionError
-    return 2
-#tests that test for va-func transformation
-def test_func_2_args(arg1, arg2):
-    return "{}_;_{}".format(arg1, arg2)
+def use_multithreading():
+    """
+        If you plan on using execute_async, put this function
+        on top of your __main__ script. Otherwise, execute_async
+        might not work correctly.
+    """
+    if __name__ == "__main__":
+        multiprocessing.freeze_support()
+
+# multiprocessing requires funcs to be defined in __main_mp__
+# or __mp_main__
+if is_debug():
+    use_multithreading();
+    def test_func(inp):
+        if type(inp) is str:
+            raise ZeroDivisionError
+        return 2
+    #tests that test for va-func transformation
+    def test_func_2_args(arg1, arg2):
+        return "{}_;_{}".format(arg1, arg2)
   
-def division(arg1, arg2):
-    return arg1/arg2
+    def division(arg1, arg2):
+        return arg1/arg2
 
-def return_1_increment(val):
-    return val+1
+    def return_1_increment(val):
+        return val+1
 
-def test_dict_ret_inc(min,max,r=5):
-    ret_val = dict()
-    for i in range(min,max,r):
-        ret_val[(i,)]=i+1
-    return ret_val
+    def test_dict_ret_inc(min,max,r=5):
+        ret_val = dict()
+        for i in range(min,max,r):
+            ret_val[(i,)]=i+1
+        return ret_val
 # example usage
-if __name__ == "__main__":
     def add_tests(UTEST_INSTANCE):
         UTEST_INSTANCE.add_test(test_func,2, 2)
         UTEST_INSTANCE.add_test(test_func, "2", "2")
@@ -441,11 +482,11 @@ if __name__ == "__main__":
         UTEST_INSTANCE.add_tests(*entries)
 
         # Expect (max/range)+3 / (max/range)+6
-        #UTEST_INSTANCE.execute(5)
-    sync_utest = UnitTest()
-    add_tests(sync_utest)
-    sync_utest.execute()
-    add_tests(UTEST_INSTANCE)
-    # Expect the execution facing a deadlock somewhere.
-    UTEST_INSTANCE.execute_async()
-    
+
+    if __name__ == "__main__":
+        #sync_utest = UnitTest()
+        #add_tests(sync_utest)
+        #sync_utest.execute()
+        add_tests(UTEST_INSTANCE)
+        #Expect the execution facing a deadlock somewhere.
+        UTEST_INSTANCE.execute_async()
