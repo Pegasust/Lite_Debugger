@@ -225,6 +225,48 @@ class TestEntry:
             ret_val.add(cls(func_ptr,\
                             equal_func_ptr,equal_rhs,func_name,*func_arg))
         return ret_val
+
+    @classmethod
+    def multi_init_list(cls,func_ptr:Callable[...,Any],\
+        equal_func_ptr:Callable[...,Any],\
+        func_arg_2_equal_rhs:List[Any]\
+        ,func_name:str=None,\
+        get_each_equal_rhs = False)\
+       -> set:
+        """
+            Initialize multiple TestEntry and return a
+            set of TestEntry's.
+            Argument:
+                -func_arg_2_equal_rhs must have even length
+                because it contains the func_args as key and
+                expected result as value
+        """
+
+        if func_name is None:
+            func_name = func_ptr.__name__
+        ret_val = set()
+        i = 0
+        while i < len(func_arg_2_equal_rhs):
+            func_arg = func_arg_2_equal_rhs[i]
+            equal_rhs = func_arg_2_equal_rhs[i+1]
+            if get_each_equal_rhs:
+                # check if equal_rhs is iterable
+                try:
+                    i = iter(equal_rhs)
+                    for rhs in i:
+                        ret_val.add(cls(\
+                            func_ptr,equal_func_ptr,rhs,func_name,*func_arg))
+                    # ignore anything below
+                    continue
+                except TypeError:
+                    pass
+            # if not get_each_equal_rhs or (is not iterable)
+            # add only one test per func_arg tuple
+            ret_val.add(cls(func_ptr,\
+                            equal_func_ptr,equal_rhs,func_name,*func_arg))
+            i+=2
+        return ret_val
+
     def execute(self, utest, timedout = None):
         try:
             # Create a string expression of the function: func(*func_arg)
